@@ -15,7 +15,7 @@ enum ActiveComponent {
 	case Counter
 }
 
-func renderApp(component: Few.Component<ActiveComponent>, state: ActiveComponent) -> Element {
+func renderApp(component: Component<ActiveComponent>, state: ActiveComponent) -> Element {
 	var contentComponent: Element!
 	switch state {
 	case .Demo:
@@ -37,6 +37,21 @@ func renderApp(component: Few.Component<ActiveComponent>, state: ActiveComponent
 				}
 				.margin(Edges(top: 20))
 		])
+
+//	return Element()
+//		.direction(.Column)
+//		.justification(.Center)
+//		.children([
+//			Element().height(90).children([
+//				View(backgroundColor: .grayColor()).width(32),
+//				View(backgroundColor: .blackColor(), cornerRadius: 20).width(40).height(40).margin(Edges(left: -10)).selfAlignment(.Center),
+//				Element().selfAlignment(.Center).direction(.Column).flex(1).children([
+//					Label("Lorem Ipsum"),
+//					Label("Dolor"),
+//				]),
+//				View(backgroundColor: .blackColor()).width(30).height(30).selfAlignment(.Center).margin(Edges(right: 10))
+//			])
+//		])
 }
 
 func toggleDisplay(display: ActiveComponent) -> ActiveComponent {
@@ -56,7 +71,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 	private let appComponent = Component(initialState: .Converter, render: renderApp)
 
 	func applicationDidFinishLaunching(notification: NSNotification) {
-		let contentView = window.contentView as NSView
+		let contentView = window.contentView as! NSView
 		appComponent.addToView(contentView)
 	}
 }

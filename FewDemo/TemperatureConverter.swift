@@ -12,8 +12,12 @@ import Few
 struct ConverterState {
 	static let defaultFahrenheit: CGFloat = 32
 
-	let fahrenheit = defaultFahrenheit
-	let celcius = f2c(defaultFahrenheit)
+	let fahrenheit: CGFloat
+	let celcius: CGFloat
+	init(fahrenheit: CGFloat = defaultFahrenheit, celcius: CGFloat = f2c(defaultFahrenheit)) {
+		self.fahrenheit = fahrenheit
+		self.celcius = celcius
+	}
 }
 
 private func c2f(c: CGFloat) -> CGFloat {
@@ -25,7 +29,7 @@ private func f2c(f: CGFloat) -> CGFloat {
 }
 
 private func renderLabeledInput(label: String, value: String, autofocus: Bool, fn: String -> ()) -> Element {
-	return View()
+	return Element()
 		.direction(.Row)
 		.padding(Edges(bottom: 4))
 		.children([
@@ -45,14 +49,13 @@ private func parseFloat(str: String) -> CGFloat? {
 }
 
 typealias TemperatureConverter = TemperatureConverter_<ConverterState>
-class TemperatureConverter_<LOL>: Few.Component<ConverterState> {
+class TemperatureConverter_<LOL>: Component<ConverterState> {
 	init() {
 		super.init(initialState: ConverterState());
 	}
 
 	override func render() -> Element {
-		let state = getState()
-		return View()
+		return Element()
 			.justification(.Center)
 			.childAlignment(.Center)
 			.direction(.Column)

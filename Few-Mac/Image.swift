@@ -33,12 +33,13 @@ public class Image: Element {
 
 			if view.image != image {
 				view.image = image
+				realizedSelf?.markNeedsLayout()
 			}
 		}
 	}
 
 	public override func createView() -> ViewType {
-		let view = NSImageView(frame: frame)
+		let view = NSImageView(frame: CGRectZero)
 		view.image = image
 		view.editable = false
 		view.allowsCutCopyPaste = false

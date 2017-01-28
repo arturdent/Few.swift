@@ -46,12 +46,13 @@ public class Label: Element {
 		if let textField = realizedSelf?.view as? NSTextField {
 			if attributedString != textField.attributedStringValue {
 				textField.attributedStringValue = attributedString
+				realizedSelf?.markNeedsLayout()
 			}
 		}
 	}
 
 	public override func createView() -> ViewType {
-		let field = NSTextField(frame: frame)
+		let field = NSTextField(frame: CGRectZero)
 		field.editable = false
 		field.drawsBackground = false
 		field.bordered = false
@@ -62,7 +63,7 @@ public class Label: Element {
 		return field
 	}
 
-	internal override func assembleLayoutNode() -> Node {
+	public override func assembleLayoutNode() -> Node {
 		let childNodes = children.map { $0.assembleLayoutNode() }
 		return Node(size: frame.size, children: childNodes, direction: direction, margin: marginWithPlatformSpecificAdjustments, padding: paddingWithPlatformSpecificAdjustments, wrap: wrap, justification: justification, selfAlignment: selfAlignment, childAlignment: childAlignment, flex: flex) { w in
 			estimateStringSize(self.attributedString, maxSize: CGSize(width: w.isNaN ? ABigDimension : w, height: ABigDimension))

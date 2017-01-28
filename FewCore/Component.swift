@@ -25,11 +25,7 @@ import AppKit
 /// by calling the `render` function passed in to its init. But subclasses can
 /// optimize this by implementing `componentShouldRender`.
 public class Component<S>: Element {
-	private var state: S
-
-	private var rootElement: Element?
-
-	private var realizedRoot: RealizedElement?
+	public private(set) var state: S
 
 	private let renderFn: ((Component, S) -> Element)?
 
@@ -39,6 +35,11 @@ public class Component<S>: Element {
 
 	/// Is the component a root?
 	private var root = false
+
+	/// Is the component currently rendering?
+	private var rendering = false
+
+	private var parent: RealizedElement?
 
 	private var frameChangedTrampoline = TargetActionTrampoline()
 
@@ -73,67 +74,13 @@ public class Component<S>: Element {
 		}
 	}
 
-	final private func renderSelf() {
-		if let rootElement = rootElement {
-			applyDiff(self, realizedSelf: nil)
-		}
-	}
-
-	final private func realizeNewRoot(newRoot: Element) {
-		let realized = newRoot.realize()
-
-		configureViewToAutoresize(realized.view)
-
-		realizedRoot?.view.removeFromSuperview()
-		realizedRoot = realized
-	}
-
-	final private func renderNewRoot() {
-		let newRoot = render()
-		newRoot.frame = frame
-
-		let node = newRoot.assembleLayoutNode()
-		var layout: Layout!
-		if root {
-			layout = node.layout(maxWidth: frame.size.width)
-		} else {
-			layout = node.layout()
-		}
-
-		newRoot.applyLayout(layout)
-
-		// If we're not the root then we should expect the root to set our 
-		// frame. We shouldn't size or position ourselves.
-		if !root {
-			newRoot.frame = frame
-		}
-
-		if let rootElement = rootElement {
-			if newRoot.canDiff(rootElement) {
-				newRoot.applyDiff(rootElement, realizedSelf: realizedRoot)
-			} else {
-				let superview = realizedRoot!.view.superview!
-				rootElement.derealize()
-
-				realizeNewRoot(newRoot)
-				superview.addSubview(realizedRoot!.view)
-
-				newRoot.elementDidRealize(realizedRoot!)
-			}
-
-			componentDidRender()
-		}
-
-		rootElement = newRoot
-	}
-
 	/// Render the component without changing any state.
 	///
 	/// Note that unlike Component.updateState, this doesn't enqueue a render to 
-	/// be performed at the end of the runloop. Instead it immediately 
+	/// be performed at the end of the runloop. Instead it immediately
 	/// re-renders.
 	final public func forceRender() {
-		renderSelf()
+		rerender()
 	}
 	
 	/// Called when the component will be realized and before the component is
@@ -158,8 +105,12 @@ public class Component<S>: Element {
 	/// *should* based on the new state.
 	///
 	/// The default implementation always returns true.
-	public func componentShouldRender(previousState: S, newState: S) -> Bool {
+	public func componentShouldRender(previousSelf: Component, previousState: S) -> Bool {
 		return true
+	}
+
+	private var realizedSelf: RealizedElement? {
+		return parent?.realizedElementForElement(self)
 	}
 	
 	// MARK: -
@@ -169,29 +120,37 @@ public class Component<S>: Element {
 	public func addToView(hostView: ViewType) {
 		root = true
 		frame = hostView.bounds
-		performInitialRenderIfNeeded()
-		realizeRootIfNeeded()
-		hostView.addSubview(realizedRoot!.view)
-		rootElement?.elementDidRealize(realizedRoot!)
+		parent = RealizedElement(element: self, view: hostView, parent: nil)
+
+		realize(parent)
+		layout()
 
 #if os(OSX)
+		configureViewForFrameChangedEvent(hostView)
+#endif
+	}
+
+#if os(OSX)
+	final private func configureViewForFrameChangedEvent(hostView: ViewType) {
 		hostView.postsFrameChangedNotifications = true
-		realizedRoot!.view.autoresizesSubviews = false
+		hostView.autoresizesSubviews = false
 
 		frameChangedTrampoline.action = { [weak self] in
 			if let strongSelf = self {
 				strongSelf.hostViewFrameChanged(hostView)
 			}
 		}
+
 		NSNotificationCenter.defaultCenter().addObserver(frameChangedTrampoline, selector: frameChangedTrampoline.selector, name: NSViewFrameDidChangeNotification, object: hostView)
-#endif
 	}
 
 	final private func hostViewFrameChanged(hostView: ViewType) {
 		frame.size = hostView.frame.size
+		realizedSelf?.markNeedsLayout()
 		// A full re-render is less than ideal :|
-		renderNewRoot()
+		forceRender()
 	}
+#endif
 
 	/// Remove the component from its host view.
 	public func remove() {
@@ -205,149 +164,138 @@ public class Component<S>: Element {
 	}
 	
 	/// Update the state using the given function.
-	final public func updateState(fn: S -> S) {
-		precondition(NSThread.isMainThread(), "Component.updateState called on a background thread. Donut do that!")
+	final public func updateState(@noescape fn: S -> S) {
+		precondition(NSThread.isMainThread(), "Updating component state on a background thread. Donut do that!")
 
-		let oldState = state
-		state = fn(oldState)
+		state = fn(state)
 		
-		if componentShouldRender(oldState, newState: state) {
-			enqueueRender()
-		}
+		enqueueRender()
 	}
 
-	final public func modifyState(fn: inout S -> ()) {
-		precondition(NSThread.isMainThread(), "Component.modifyState called on a background thread. Donut do that!")
-
-		let oldState = state
-		fn(&state)
-
-		if componentShouldRender(oldState, newState: state) {
-			enqueueRender()
+	final public func modifyState(@noescape fn: inout S -> ()) {
+		updateState { (var s) in
+			fn(&s)
+			return s
 		}
 	}
 
 	final private func enqueueRender() {
 		if renderQueued { return }
 
+		if let root = realizedSelf?.findRoot() where root.element.isRenderQueued {
+			return
+		}
+
 		renderQueued = true
 
 		let observer = CFRunLoopObserverCreateWithHandler(kCFAllocatorDefault, CFRunLoopActivity.BeforeWaiting.rawValue, 0, 0) { _, activity in
 			self.renderQueued = false
-			self.renderSelf()
+			self.rerender()
 		}
 		CFRunLoopAddObserver(CFRunLoopGetMain(), observer, kCFRunLoopCommonModes)
 	}
 
-	/// Get the current state of the component.
-	final public func getState() -> S {
-		return state
+	final private func rerender() {
+		applyDiff(self, realizedSelf: realizedSelf)
 	}
 
-	final public func findView(element: Element) -> ViewType? {
-		if let realizedElement = realizedRoot {
-			return findViewRecursively(element, rootElement: realizedElement)
-		} else {
-			return nil
-		}
-	}
-
-	final private func findViewRecursively(element: Element, rootElement: RealizedElement) -> ViewType? {
-		if rootElement.element === element { return rootElement.view }
-
-		for child in rootElement.children {
-			let result = findViewRecursively(element, rootElement: child)
-			if result != nil { return result }
-		}
-
-		return nil
-	}
-
-	/// Find the view with the given key. This will only find views for elements
-	/// which have been realized.
-	final public func findViewWithKey(key: String) -> ViewType? {
-		if let realizedElement = realizedRoot {
-			return findViewWithKeyRecursive(key, rootElement: realizedElement)
-		} else {
-			return nil
-		}
-	}
-
-	final private func findViewWithKeyRecursive(key: String, rootElement: RealizedElement) -> ViewType? {
-		if rootElement.element.key == key { return rootElement.view }
-
-		for element in rootElement.children {
-			let result = findViewWithKeyRecursive(key, rootElement: element)
-			if result != nil { return result }
-		}
-
-		return nil
-	}
-	
 	// MARK: Element
 	
 	public override func applyDiff(old: Element, realizedSelf: RealizedElement?) {
-		super.applyDiff(old, realizedSelf: realizedSelf)
+		let oldComponent = old as! Component
+		let shouldRender = componentShouldRender(oldComponent, previousState: oldComponent.state)
 
-		// Use `unsafeBitCast` instead of `as` to avoid a runtime crash.
-		let oldComponent = unsafeBitCast(old, Component.self)
-
+		parent = oldComponent.parent
 		root = oldComponent.root
 		state = oldComponent.state
-		rootElement = oldComponent.rootElement
-		realizedRoot = oldComponent.realizedRoot
+		frameChangedTrampoline = oldComponent.frameChangedTrampoline
 
-		renderNewRoot()
+		rendering = true
+
+		if shouldRender {
+			updateChildren()
+			super.applyDiff(old, realizedSelf: realizedSelf)
+		}
+
+		realizedSelf?.layoutFromRoot()
+
+		rendering = false
+
+		componentDidRender()
+	}
+
+	internal override var isRoot: Bool {
+		return root
+	}
+
+	internal override var isRendering: Bool {
+		return rendering
+	}
+
+	internal override var isRenderQueued: Bool {
+		return renderQueued
+	}
+
+	private func updateChildren() {
+		let element = render()
+		if root {
+			// The root element should flex to fill its container.
+			element.flex = 1
+		}
+		children = [ element ]
+	}
+
+	private func layout() {
+		realizedSelf?.layoutFromRoot()
 	}
 	
-	public override func realize() -> RealizedElement {
-		performInitialRenderIfNeeded()
-		realizeRootIfNeeded()
-		return RealizedElement(element: self, view: realizedRoot!.view)
+	public override func realize(parent: RealizedElement?) -> RealizedElement {
+		componentWillRealize()
+
+		self.parent = parent
+
+		updateChildren()
+
+		let realizedElement = super.realize(parent)
+
+		componentDidRealize()
+
+		return realizedElement
 	}
 
 	public override func derealize() {
 		componentWillDerealize()
 
-		rootElement?.derealize()
-		rootElement = nil
-
-		realizedRoot?.view.removeFromSuperview()
-		realizedRoot = nil
+		parent = nil
 
 		componentDidDerealize()
 	}
+}
 
-	final private func performInitialRenderIfNeeded() {
-		if rootElement == nil {
-			renderNewRoot()
+extension Component {
+	final public func findView(element: Element) -> ViewType? {
+		return findViewRecursively(realizedSelf) { $0.element === element }
+	}
+
+	/// Find the view with the given key. This will only find views for elements
+	/// which have been realized.
+	final public func findViewWithKey(key: String) -> ViewType? {
+		return findViewRecursively(realizedSelf) { $0.element.key == key }
+	}
+
+	final private func findViewRecursively(rootElement: RealizedElement?, predicate: RealizedElement -> Bool) -> ViewType? {
+		if let rootElement = rootElement {
+			if predicate(rootElement) {
+				return rootElement.view
+			} else {
+				for element in rootElement.children {
+					if let result = findViewRecursively(element, predicate: predicate) {
+						return result
+					}
+				}
+			}
 		}
-	}
 
-	final private func realizeRootIfNeeded() {
-		if realizedRoot == nil {
-			componentWillRealize()
-			realizeNewRoot(rootElement!)
-			didRealizeFn?(self)
-			componentDidRealize()
-		}
-	}
-
-	internal override func assembleLayoutNode() -> Node {
-		performInitialRenderIfNeeded()
-
-		return rootElement!.assembleLayoutNode()
-	}
-
-	override func applyLayout(layout: Layout) {
-		frame = layout.frame
-
-		rootElement?.applyLayout(layout)
-	}
-
-	public override func elementDidRealize(realizedSelf: RealizedElement) {
-		super.elementDidRealize(realizedSelf)
-
-		rootElement?.elementDidRealize(realizedRoot!)
+		return nil
 	}
 }

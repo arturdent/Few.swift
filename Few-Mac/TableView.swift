@@ -9,34 +9,25 @@
 import Foundation
 import AppKit
 
-private var ElementKey = "ElementKey"
-
 private let defaultRowHeight: CGFloat = 42
 
 private class FewListCell: NSTableCellView {
 	private var realizedElement: RealizedElement?
 
-	func updateWithElement(element: Element) {
+	func updateWithElement(element: Element, parent: RealizedElement) {
 		if let realizedElement = realizedElement {
 			if element.canDiff(realizedElement.element) {
 				element.applyDiff(realizedElement.element, realizedSelf: realizedElement)
 			} else {
-				realizedElement.element.derealize()
-				realizedElement.view.removeFromSuperview()
+				realizedElement.remove()
 
-				let newRealizedElement = element.realize()
-				newRealizedElement.view.autoresizingMask = .ViewWidthSizable | .ViewHeightSizable
-				newRealizedElement.view.frame = bounds
-				addSubview(newRealizedElement.view)
+				self.realizedElement = element.realize(parent)
 			}
 		} else {
-			let newRealizedElement = element.realize()
-			newRealizedElement.view.autoresizingMask = .ViewWidthSizable | .ViewHeightSizable
-			newRealizedElement.view.frame = bounds
-			addSubview(newRealizedElement.view)
-
-			realizedElement = newRealizedElement
+			realizedElement = element.realize(parent)
 		}
+
+		realizedElement?.layoutFromRoot()
 	}
 
 	override init(frame: CGRect) {
@@ -53,8 +44,12 @@ private class TableViewHandler: NSObject, NSTableViewDelegate, NSTableViewDataSo
 
 	var supressChangeNotification = false
 
+	var parents: [String: RealizedElement] = [:]
+
 	var elements: [Element] {
 		didSet {
+			updateCachedHeights()
+
 			let selectedRows = tableView.selectedRowIndexes
 			tableView.reloadData()
 			supressChangeNotification = true
@@ -62,6 +57,8 @@ private class TableViewHandler: NSObject, NSTableViewDelegate, NSTableViewDataSo
 			supressChangeNotification = false
 		}
 	}
+
+	var cachedHeights: [String: CGFloat] = [:]
 
 	var selectionChanged: (Int -> ())?
 
@@ -85,22 +82,30 @@ private class TableViewHandler: NSObject, NSTableViewDelegate, NSTableViewDataSo
 		let element = elements[row]
 
 		let key = "ListCell"
-		var listCell = tableView.makeViewWithIdentifier(key, owner: nil) as FewListCell?
+		var listCell = tableView.makeViewWithIdentifier(key, owner: nil) as! FewListCell?
 		if listCell == nil {
 			let newListCell = FewListCell(frame: CGRectZero)
 			newListCell.identifier = key
 
+			let parent = RealizedElement(element: Element(), view: newListCell, parent: nil)
+			parents[parentKeyForCell(newListCell)] = parent
+
 			listCell = newListCell
 		}
 
-		listCell?.updateWithElement(element)
+		let parent = parents[parentKeyForCell(listCell!)]!
+		listCell?.updateWithElement(element, parent: parent)
 
 		return listCell
 	}
 
+	func parentKeyForCell(cell: FewListCell) -> String {
+		return memoryAddress(cell)
+	}
+
 	@objc func tableView(tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-		let height = NSHeight(elements[row].frame)
-		return height > CGFloat(0) ? height : defaultRowHeight
+		let element = elements[row]
+		return cachedHeights[memoryAddress(element)] ?? defaultRowHeight
 	}
 
 	@objc func tableViewSelectionIsChanging(notification: NSNotification) {
@@ -119,6 +124,15 @@ private class TableViewHandler: NSObject, NSTableViewDelegate, NSTableViewDataSo
 
 	@objc func numberOfRowsInTableView(tableView: NSTableView) -> Int {
 		return elements.count
+	}
+
+	func updateCachedHeights() {
+		cachedHeights.removeAll(keepCapacity: true)
+		for element in elements {
+			let node = element.assembleLayoutNode()
+			let layout = node.layout(maxWidth: tableView.frame.size.width)
+			cachedHeights[memoryAddress(element)] = layout.frame.size.height
+		}
 	}
 }
 
@@ -145,8 +159,6 @@ public class TableView: Element {
 		if let scrollView = realizedSelf?.view as? FewScrollView {
 			let handler = scrollView.handler
 
-			layoutElements()
-
 			handler?.elements = elements
 
 			let tableView = scrollView.handler?.tableView
@@ -165,7 +177,7 @@ public class TableView: Element {
 	}
 
 	public override func createView() -> ViewType {
-		let scrollView = FewScrollView(frame: frame)
+		let scrollView = FewScrollView(frame: CGRectZero)
 		scrollView.hasVerticalScroller = true
 		scrollView.borderType = .BezelBorder
 		scrollView.alphaValue = alpha
@@ -181,19 +193,19 @@ public class TableView: Element {
 
 		scrollView.documentView = tableView
 
-		layoutElements()
-
 		scrollView.handler = TableViewHandler(tableView: tableView, elements: elements)
 		scrollView.handler?.selectionChanged = selectionChanged
 		
 		return scrollView
 	}
 
-	private final func layoutElements() {
-		for element in elements {
-			let node = element.assembleLayoutNode()
-			let layout = node.layout(maxWidth: frame.size.width)
-			element.applyLayout(layout)
+	public override func elementDidLayout(realizedSelf: RealizedElement?) {
+		super.elementDidLayout(realizedSelf)
+
+		if let scrollView = realizedSelf?.view as? FewScrollView {
+			let handler = scrollView.handler
+
+			handler?.elements = elements
 		}
 	}
 }

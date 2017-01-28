@@ -10,11 +10,11 @@ import Foundation
 
 extension Element {
 	public func debugQuickLookObject() -> AnyObject? {
-		let realizedSelf = realize()
+		let realizedSelf = realize(nil)
 		return realizedSelf.view
 	}
 
 	public var ql: ViewType {
-		return debugQuickLookObject()! as ViewType
+		return debugQuickLookObject()! as! ViewType
 	}
 }

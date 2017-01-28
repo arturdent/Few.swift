@@ -42,7 +42,7 @@ public class Button: Element {
 				button.enabled = enabled
 			}
 
-			let oldButton = old as Button
+			let oldButton = old as! Button
 			if isDefault != oldButton.isDefault {
 				if isDefault {
 					button.keyEquivalent = "\r"
@@ -60,7 +60,7 @@ public class Button: Element {
 	}
 
 	public override func createView() -> ViewType {
-		let button = NSButton(frame: frame)
+		let button = NSButton(frame: CGRectZero)
 		button.bezelStyle = .TexturedRoundedBezelStyle
 		button.title = title
 		button.target = trampoline

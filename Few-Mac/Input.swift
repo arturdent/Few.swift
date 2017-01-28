@@ -13,7 +13,7 @@ internal class InputDelegate: NSObject, NSTextFieldDelegate {
 	var action: (NSTextField -> ())?
 
 	override func controlTextDidChange(notification: NSNotification) {
-		let field = notification.object as NSTextField
+		let field = notification.object as! NSTextField
 		action?(field)
 	}
 }
@@ -77,7 +77,7 @@ public class Input: Element {
 	}
 	
 	public override func createView() -> ViewType {
-		let field = NSTextField(frame: frame)
+		let field = NSTextField(frame: CGRectZero)
 		field.editable = true
 		field.stringValue = text ?? initialText ?? ""
 		field.delegate = inputDelegate
